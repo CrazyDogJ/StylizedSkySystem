@@ -272,10 +272,10 @@ void AStylizedSkyActor::UpdateNiagaraAsset(const bool ClearAsset) const
 		else
 		{
 			NiagaraComp->Deactivate();
-		}
-		if (ClearAsset)
-		{
-			NiagaraComp->SetAsset(nullptr);
+			if (ClearAsset)
+			{
+				NiagaraComp->SetAsset(nullptr);
+			}
 		}
 	}
 }
@@ -296,11 +296,10 @@ void AStylizedSkyActor::UpdateAudioAsset(const bool ClearAsset) const
 		else
 		{
 			AudioComp->FadeOut(5.0f, 0.0f);
-		}
-		
-		if (ClearAsset)
-		{
-			AudioComp->SetSound(nullptr);
+			if (ClearAsset)
+			{
+				AudioComp->SetSound(nullptr);
+			}
 		}
 	}
 }
