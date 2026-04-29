@@ -7,6 +7,7 @@
 #include "Rendering/ExponentialHeightFogData.h"
 #include "StylizedSkyActor.generated.h"
 
+class UIndoorDetectionComponent;
 class UNiagaraComponent;
 class UStylizedSkyWeatherData;
 class UPostProcessComponent;
@@ -18,6 +19,7 @@ class UCurveFloat;
 
 // Day time seconds;
 constexpr float DAY_MAX_TIME = 86400.0f;
+constexpr float LUNAR_CYCLE = 29.53f;
 
 DECLARE_DYNAMIC_DELEGATE_OneParam(FTimeTriggerEvent, float, TriggerTime);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTimeTriggerEventMulticast, float, TriggerTime);
@@ -41,6 +43,21 @@ struct FTimeTriggerTask
 			Itr.ExecuteIfBound(TriggerTime);
 		}
 	}
+};
+
+USTRUCT(BlueprintType)
+struct FMoonPhaseData
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere)
+	float Phase;        // 0~1
+
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere)
+	float Illumination; // 0~1 (亮面比例)
+
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere)
+	float Angle;        // -1~1 (左右方向)
 };
 
 UCLASS(Blueprintable)
@@ -78,6 +95,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Post Process")
 	UPostProcessComponent* PostProcessComponent;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather")
+	UIndoorDetectionComponent* IndoorDetectionComponent;
+
 	// Properties ------------------------------------------------------------------------------------
 
 	/** Float day time, easy to use in coding. */
@@ -87,6 +107,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Replicated, meta=( PropertyVisible, UIMin = 0, ClampMin = 0 ), Category = "Day Time")
 	int Day = 1; 
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, meta=( PropertyVisible ), Category = "Moon")
+	FMoonPhaseData CurrentMoonPhase;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=( PropertyVisible ), Category = "Moon")
+	FVector2D MoonPhaseIlluminateClamp = FVector2D(0.1, 1.0);
+	
 	/** Day time flowing speed. Default will be 60, that means 1s real time equals to 1min game time. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=( PropertyVisible ), Category = "Day Time")
 	float TimeFlowSpeed = 60.0f;
@@ -149,7 +175,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, meta=( PropertyVisible ), Replicated, Category = "Weather")
 	UStylizedSkyWeatherData* PreviousWeatherPreset = nullptr;
 	
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, meta=( PropertyVisible ), Replicated, BlueprintSetter = SetWeatherPreset, Category = "Weather")
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, meta=( PropertyVisible ), ReplicatedUsing = OnRep_WeatherPreset, BlueprintSetter = SetWeatherPreset, Category = "Weather")
 	UStylizedSkyWeatherData* WeatherPreset = nullptr;
 
 	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, meta=( PropertyVisible ), Replicated, Category = "Weather")
@@ -174,6 +200,9 @@ public:
 	// Time Manager Task -----------------------------------------------------------------------------------
 	void InsertTask(const float InRawDayTime, const FTimeTriggerTask& TriggerTask);
 	
+	UFUNCTION(BlueprintPure)
+	FMoonPhaseData GetMoonPhaseData() const;
+
 	UFUNCTION(BlueprintCallable)
 	void RegisterTimeTriggerEvent(const float InRawDayTime, FTimeTriggerEvent TriggerEvent);
 
@@ -185,6 +214,12 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent)
 	UAudioComponent* GetAudioComponent() const;
+
+	UFUNCTION(BlueprintNativeEvent)
+	void OnIndoorAlphaChanged(float NewAlpha);
+
+	virtual float GetMoonIntensity(const float& NormalizedDayTime) const;
+	virtual float GetSunIntensity(const float& NormalizedDayTime) const;
 	
 #if WITH_EDITOR
 	virtual bool ShouldTickIfViewportsOnly() const override;
@@ -222,7 +257,7 @@ private:
 	void UpdateSunMoonVisual() const;
 	
 	/** Update sun and moon. */
-	void UpdateSunMoon() const;
+	void UpdateSunMoon();
 
 	void UpdatePostProcess() const;
 	
@@ -233,6 +268,9 @@ private:
 	UFUNCTION(BlueprintCallable)
 	void SetWeatherPreset(UStylizedSkyWeatherData* InWeatherData);
 
+	UFUNCTION()
+	void OnRep_WeatherPreset();
+	
 	void UpdateWeather(float DeltaTime);
 
 	UMaterialInstance* GetPreviousCloudMaterialInstance() const;

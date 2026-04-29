@@ -1,6 +1,7 @@
 ﻿
 #include "StylizedSkyActor.h"
 
+#include "IndoorDetectionComponent.h"
 #include "StylizedSkySubsystem.h"
 #include "StylizedSkyWeatherData.h"
 #include "NiagaraComponent.h"
@@ -31,6 +32,10 @@ AStylizedSkyActor::AStylizedSkyActor(const FObjectInitializer& ObjectInitializer
 	CloudComponent = CreateDefaultSubobject<UVolumetricCloudComponent>(TEXT("VolumetricCloud"));
 	ExponentialHeightFog = CreateDefaultSubobject<UExponentialHeightFogComponent>(TEXT("ExponentialHeightFog"));
 
+	IndoorDetectionComponent = CreateDefaultSubobject<UIndoorDetectionComponent>(TEXT("IndoorDetection"));
+	IndoorDetectionComponent->ScanInterval = 1.0f;
+	IndoorDetectionComponent->OnIndoorAlphaChanged.AddUniqueDynamic(this, &ThisClass::OnIndoorAlphaChanged);
+	
 	DirectionalLight_Sun->SetForwardShadingPriority(0);
 	DirectionalLight_Moon->SetForwardShadingPriority(1);
 
@@ -63,6 +68,8 @@ void AStylizedSkyActor::OnConstruction(const FTransform& Transform)
 
 void AStylizedSkyActor::BeginPlay()
 {
+	IndoorDetectionComponent->PrimitiveComponent = GetAudioComponent();
+	
 	Super::BeginPlay();
 
 	if (const auto Subsystem = GetWorld()->GetSubsystem<UStylizedSkySubsystem>())
@@ -211,7 +218,7 @@ void AStylizedSkyActor::UpdateSunMoonVisual() const
 		if (DirectionalLight_Sun->GetComponentRotation().Pitch <= 0.0f)
 		{
 			DirectionalLight_Sun->SetVisibility(true);
-			DirectionalLight_Sun->SetIntensity(SunLightDensityCurve->GetFloatValue(NormalizedDayTime));
+			DirectionalLight_Sun->SetIntensity(GetSunIntensity(NormalizedDayTime));
 			DirectionalLight_Sun->SetCastShadows(true);
 		}
 		else
@@ -227,7 +234,7 @@ void AStylizedSkyActor::UpdateSunMoonVisual() const
 		if (DirectionalLight_Moon->GetComponentRotation().Pitch < 0.0f)
 		{
 			DirectionalLight_Moon->SetVisibility(true);
-			DirectionalLight_Moon->SetIntensity(MoonLightDensityCurve->GetFloatValue(NormalizedDayTime));
+			DirectionalLight_Moon->SetIntensity(GetMoonIntensity(NormalizedDayTime));
 			DirectionalLight_Moon->SetCastShadows(true);
 		}
 		else
@@ -249,8 +256,9 @@ void AStylizedSkyActor::UpdateSunMoonVisual() const
 	}
 }
 
-void AStylizedSkyActor::UpdateSunMoon() const
+void AStylizedSkyActor::UpdateSunMoon()
 {
+	CurrentMoonPhase = GetMoonPhaseData();
 	UpdateSunMoonAngle();
 	UpdateSunMoonVisual();
 }
@@ -316,6 +324,12 @@ void AStylizedSkyActor::SetWeatherPreset(UStylizedSkyWeatherData* InWeatherData)
 	}
 }
 
+void AStylizedSkyActor::OnRep_WeatherPreset()
+{
+	UpdateNiagaraAsset();
+	UpdateAudioAsset();
+}
+
 void AStylizedSkyActor::UpdateWeather(float DeltaTime)
 {
 	const auto Delta = DeltaTime * (WeatherPreset ? WeatherPreset->GetFadeAlphaSpeed() : 1.0f / 5.0f);
@@ -346,8 +360,8 @@ void AStylizedSkyActor::UpdateWeather(float DeltaTime)
 	float Density;
 	FLinearColor Color;
 	GetCurrentLightSettings(Density, Color);
-	const float SunIntensity = SunLightDensityCurve->GetFloatValue(NormalizedDayTime);
-	const float MoonIntensity = MoonLightDensityCurve->GetFloatValue(NormalizedDayTime);
+	const float SunIntensity = GetSunIntensity(NormalizedDayTime);
+	const float MoonIntensity = GetMoonIntensity(NormalizedDayTime);
 	const float SkylightIntensity = SkyLightDensityCurve->GetFloatValue(NormalizedDayTime);
 	DirectionalLight_Sun->SetIntensity(FMath::Lerp(SunIntensity * PrevDensity, SunIntensity * Density, WeatherAlpha));
 	DirectionalLight_Moon->SetIntensity(FMath::Lerp(MoonIntensity * PrevDensity, MoonIntensity * Density, WeatherAlpha));
@@ -505,6 +519,20 @@ void AStylizedSkyActor::InsertTask(const float InRawDayTime, const FTimeTriggerT
 	}
 }
 
+FMoonPhaseData AStylizedSkyActor::GetMoonPhaseData() const
+{
+	float Phase = FMath::Fmod((float)Day, LUNAR_CYCLE) / LUNAR_CYCLE;
+	float Illumination = 0.5f * (1.0f - FMath::Cos(Phase * 2.0f * PI));
+	float Angle = FMath::Sin(Phase * 2.0f * PI);
+
+	FMoonPhaseData Data;
+	Data.Phase = Phase;
+	Data.Illumination = FMath::Clamp(Illumination, MoonPhaseIlluminateClamp.X, MoonPhaseIlluminateClamp.Y);
+	Data.Angle = Angle;
+
+	return Data;
+}
+
 void AStylizedSkyActor::RegisterTimeTriggerEvent(const float InRawDayTime, FTimeTriggerEvent TriggerEvent)
 {
 	const auto Found = TimeTriggerTasks.FindByPredicate([InRawDayTime](const FTimeTriggerTask& TriggerTask)
@@ -549,6 +577,34 @@ void AStylizedSkyActor::UnregisterTimeTriggerEvent(FTimeTriggerEvent TriggerEven
 	}
 
 	TimeTriggerTasks.Shrink();
+}
+
+void AStylizedSkyActor::OnIndoorAlphaChanged_Implementation(float NewAlpha)
+{
+	if (const auto AudioComp = GetAudioComponent())
+	{
+		AudioComp->SetVolumeMultiplier(FMath::Clamp(1 - NewAlpha, 0.2f, 1.0f));
+	}
+}
+
+float AStylizedSkyActor::GetMoonIntensity(const float& NormalizedDayTime) const
+{
+	if (MoonLightDensityCurve)
+	{
+		return MoonLightDensityCurve->GetFloatValue(NormalizedDayTime) * CurrentMoonPhase.Illumination;
+	}
+
+	return DirectionalLight_Moon->Intensity;
+}
+
+float AStylizedSkyActor::GetSunIntensity(const float& NormalizedDayTime) const
+{
+	if (SunLightDensityCurve)
+	{
+		return SunLightDensityCurve->GetFloatValue(NormalizedDayTime);
+	}
+	
+	return DirectionalLight_Sun->Intensity;
 }
 
 #if WITH_EDITOR
