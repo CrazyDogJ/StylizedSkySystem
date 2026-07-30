@@ -50,6 +50,7 @@ AStylizedSkyActor::AStylizedSkyActor(const FObjectInitializer& ObjectInitializer
 	
 	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
+	bIsSpatiallyLoaded = false;
 }
 
 void AStylizedSkyActor::OnConstruction(const FTransform& Transform)
